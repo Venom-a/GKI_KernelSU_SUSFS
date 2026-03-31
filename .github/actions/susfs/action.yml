@@ -16,22 +16,22 @@ inputs:
   susfs_commit:
     description: 'Commit map (branch:commit,branch:commit...)'
     required: false
-
 runs:
   using: composite
   steps:
     - name: Setup SUSFS Branch
       shell: bash
       run: |
-        SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
-        SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
-        
+        # pershoot fork uses -dev suffix for GKI branches
+        SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}-dev"
+        SUSFS_REPO="https://gitlab.com/pershoot/susfs4ksu.git"
+
         echo "Preparing SUSFS for branch: $SUSFS_BRANCH"
-        
+
         # Parse commit map to find the commit for this branch
         COMMIT_MAP="${{ inputs.susfs_commit }}"
         TARGET_COMMIT=""
-        
+
         if [ -n "$COMMIT_MAP" ]; then
           # Split by comma
           IFS=',' read -ra ENTRIES <<< "$COMMIT_MAP"
@@ -44,7 +44,7 @@ runs:
             fi
           done
         fi
-        
+
         if [ -n "$TARGET_COMMIT" ]; then
           echo "Found specific commit for $SUSFS_BRANCH: $TARGET_COMMIT"
           git clone "$SUSFS_REPO" -b "$SUSFS_BRANCH" susfs4ksu
@@ -55,7 +55,7 @@ runs:
           echo "No specific commit found for $SUSFS_BRANCH, cloning latest..."
           git clone "$SUSFS_REPO" -b "$SUSFS_BRANCH" --depth=1 susfs4ksu
         fi
-        
+
         SUSFS_VERSION="2.0.0"
         echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
 
@@ -76,13 +76,30 @@ runs:
         CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         CONFIG_KSU_SUSFS_SUS_MAP=y
         EOF
-    
+
     - name: Apply Base SUSFS Patches
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
-        # Apply base SUSFS patches
-        cp "${{ github.workspace }}/susfs4ksu/kernel_patches/fs/"* "${{ github.workspace }}/kernel/common/fs/"
-        cp "${{ github.workspace }}/susfs4ksu/kernel_patches/include/linux/"* "${{ github.workspace }}/kernel/common/include/linux/"
-        cp ${{ github.workspace }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./
-        patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+        # Copy SUSFS kernel patch files
+        cp "${{ github.workspace }}/susfs4ksu/kernel_patches/fs/"* \
+           "${{ github.workspace }}/kernel/common/fs/"
+        cp "${{ github.workspace }}/susfs4ksu/kernel_patches/include/linux/"* \
+           "${{ github.workspace }}/kernel/common/include/linux/"
+
+        # Copy and apply main SUSFS patch
+        PATCH_FILE="50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
+        cp "${{ github.workspace }}/susfs4ksu/kernel_patches/$PATCH_FILE" ./
+        echo "Applying $PATCH_FILE..."
+        patch -p1 < "$PATCH_FILE" || true
+
+        # Apply scope-minimized manual hooks patch (pershoot specific)
+        HOOKS_PATCH="60_scope-minimized_manual_hooks.patch"
+        if [ -f "${{ github.workspace }}/susfs4ksu/kernel_patches/$HOOKS_PATCH" ]; then
+          cp "${{ github.workspace }}/susfs4ksu/kernel_patches/$HOOKS_PATCH" ./
+          echo "Applying $HOOKS_PATCH..."
+          patch -p1 < "$HOOKS_PATCH" || true
+          echo "Scope-minimized hooks patch applied"
+        else
+          echo "No scope-minimized hooks patch found, skipping"
+        fi
